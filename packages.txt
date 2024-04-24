@@ -8,3 +8,4 @@ libjpeg-dev
 zlib1g-dev
 protobuf-compiler
 cmake
+bash
