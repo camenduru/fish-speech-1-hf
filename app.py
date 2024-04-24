@@ -6,11 +6,11 @@ os.makedirs("checkpoints", exist_ok=True)
 
 if not os.path.exists("checkpoints/text2semantic-medium-v1-2k.pth"):
     print("Downloading text2semantic-medium-v1-2k.pth")
-    sp.run(["wget", "-O", "checkpoints/text2semantic-medium-v1-2k.pth", os.environ["CKPT_SEMANTIC"]])
+    sp.run(["wget", "-q", "-O", "checkpoints/text2semantic-medium-v1-2k.pth", os.environ["CKPT_SEMANTIC"]])
 
 if not os.path.exists("checkpoints/vq-gan-group-fsq-2x1024.pth"):
     print("Downloading vq-gan-group-fsq-2x1024.pth")
-    sp.run(["wget", "-O", "checkpoints/vq-gan-group-fsq-2x1024.pth", os.environ["CKPT_VQGAN"]])
+    sp.run(["wget", "-q", "-O", "checkpoints/vq-gan-group-fsq-2x1024.pth", os.environ["CKPT_VQGAN"]])
 
 print("All checkpoints downloaded")
 
@@ -213,14 +213,12 @@ def build_app():
                         )
                         reference_audio = gr.Audio(
                             label="Reference Audio / 参考音频",
-                            value="docs/assets/audios/0_input.wav",
                             type="filepath",
                         )
                         reference_text = gr.Textbox(
                             label="Reference Text / 参考文本",
                             placeholder="参考文本",
                             lines=1,
-                            value="在一无所知中，梦里的一天结束了，一个新的「轮回」便会开始。",
                         )
 
             with gr.Column(scale=3):
