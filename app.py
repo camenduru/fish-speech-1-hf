@@ -1,8 +1,7 @@
 import subprocess as sp
-sp.check_call([
-    "bash",
-    "setup.sh"
-], shell=True)
+import sys
+
+sp.check_call(["bash", "setup.sh"], shell=True, stdout=sys.stdout, stderr=sys.stderr)
 
 import html
 import os
