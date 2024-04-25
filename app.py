@@ -251,7 +251,7 @@ def build_app():
                 # speaker,
             ],
             [audio, error],
-            # concurrency_limit=1,
+            concurrency_limit=1,
         )
 
     return app
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     args = parse_args()
 
     args.precision = torch.half if args.half else torch.bfloat16
-    # args.compile = True
+    args.compile = True
 
     logger.info("Loading Llama model...")
     llama_model, decode_one_token = load_llama_model(
