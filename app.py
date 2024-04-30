@@ -1,10 +1,10 @@
 import subprocess as sp
 import os
-from huggingface_hub import hf_hub_download
+from huggingface_hub import snapshot_download
 
 # Download if not exists
 os.makedirs("checkpoints", exist_ok=True)
-hf_hub_download("fishaudio/fish-speech-1", "./checkpoints/fish-speech-1")
+snapshot_download(repo_id="fishaudio/fish-speech-1", local_dir="./checkpoints/fish-speech-1")
 
 print("All checkpoints downloaded")
 
