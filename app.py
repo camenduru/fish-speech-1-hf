@@ -1,6 +1,7 @@
 import subprocess as sp
 import os
 from huggingface_hub import snapshot_download
+import hydra
 
 # Download if not exists
 os.makedirs("checkpoints", exist_ok=True)
