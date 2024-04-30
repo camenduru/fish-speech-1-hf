@@ -600,6 +600,7 @@ def generate_long(
             yield all_codes
 
 
+
 def launch_thread_safe_queue(
     config_name,
     checkpoint_path,
@@ -607,17 +608,15 @@ def launch_thread_safe_queue(
     precision,
     max_length,
     compile=False,
-    init_event=None,
 ):
     input_queue = queue.Queue()
+    init_event = threading.Event()
 
     def worker():
         model, decode_one_token = load_model(
             config_name, checkpoint_path, device, precision, max_length, compile=compile
         )
-
-        if init_event is not None:
-            init_event.set()
+        init_event.set()
 
         while True:
             item = input_queue.get()
@@ -641,6 +640,7 @@ def launch_thread_safe_queue(
             event.set()
 
     threading.Thread(target=worker, daemon=True).start()
+    init_event.wait()
 
     return input_queue
 
