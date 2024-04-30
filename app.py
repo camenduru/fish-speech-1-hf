@@ -300,9 +300,9 @@ if __name__ == "__main__":
     args.compile = True
     args.max_gradio_length = 1024
     args.tokenizer = "./checkpoints/fish-speech-1"
-    args.llama_checkpoint_path = "./checkpoints/text2semantic-sft-large-v1-4k.pth"
+    args.llama_checkpoint_path = "./checkpoints/fish-speech-1/text2semantic-sft-large-v1-4k.pth"
     args.llama_config_name = "dual_ar_2_codebook_large"
-    args.vqgan_checkpoint_path = "./checkpoints/vq-gan-group-fsq-2x1024.pth"
+    args.vqgan_checkpoint_path = "./checkpoints/fish-speech-1/vq-gan-group-fsq-2x1024.pth"
     args.vqgan_config_name = "vqgan_pretrain"
 
     logger.info("Loading Llama model...")
