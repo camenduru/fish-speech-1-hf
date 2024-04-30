@@ -1,4 +1,3 @@
-import subprocess as sp
 import os
 from huggingface_hub import snapshot_download
 import hydra
