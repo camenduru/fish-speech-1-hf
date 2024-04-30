@@ -1,9 +1,12 @@
 import os
+import queue
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import click
+import hydra
 import numpy as np
 import torch
 import torch._dynamo.config
@@ -361,6 +364,7 @@ def encode_tokens(
 def load_model(
     config_name, checkpoint_path, device, precision, max_length, compile=False
 ):
+    hydra.core.global_hydra.GlobalHydra.instance().clear()
     with initialize(version_base="1.3", config_path="../../fish_speech/configs/model"):
         cfg = compose(
             config_name=config_name, overrides=[f"config.max_seq_len={max_length}"]
@@ -456,6 +460,7 @@ def generate_long(
     speaker: Optional[str] = None,
     prompt_text: Optional[str] = None,
     prompt_tokens: Optional[torch.Tensor] = None,
+    is_streaming: bool = False,
 ):
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
@@ -495,6 +500,10 @@ def generate_long(
         global_encoded = []
         all_codes = []
         seg_idx = 0
+
+        if use_prompt:
+            seg_idx = 1
+            global_encoded.append(encoded[0])
 
         while seg_idx < len(encoded):
             logger.info(
@@ -562,10 +571,7 @@ def generate_long(
             codes = y[1:, prompt_length:-2].clone()
 
             codes = codes - 2
-            if not (codes >= 0).all():
-                global_encoded.pop()
-                logger.warning(f"Negative code found: {codes}, retrying ...")
-                continue
+            assert (codes >= 0).all(), f"Negative code found"
 
             decoded = y[:, prompt_length:-1].clone()
             if decoded[0, -1] != im_end_id:  # <im_end>
@@ -576,13 +582,63 @@ def generate_long(
 
             # But for global encoding, we should keep the <im_end> token
             global_encoded.append(decoded)
-            all_codes.append(codes)
+
+            if is_streaming:
+                assert (codes >= 0).all(), f"Negative code found: {codes}"
+                yield codes
+            else:
+                all_codes.append(codes)
+
             seg_idx += 1
 
-        codes = torch.cat(all_codes, dim=1)
-        assert (codes >= 0).all(), f"Negative code found: {codes}"
+        if is_streaming:
+            # This indicates the end of the current sample
+            yield None
+        else:
+            all_codes = torch.cat(all_codes, dim=1)
+            assert (all_codes >= 0).all(), f"Negative code found: {codes}"
+            yield all_codes
 
-        yield codes
+
+def launch_thread_safe_queue(
+    config_name,
+    checkpoint_path,
+    device,
+    precision,
+    max_length,
+    compile=False,
+):
+    input_queue = queue.Queue()
+
+    def worker():
+        model, decode_one_token = load_model(
+            config_name, checkpoint_path, device, precision, max_length, compile=compile
+        )
+
+        while True:
+            item = input_queue.get()
+            if item is None:
+                break
+
+            kwargs = item["request"]
+            event = item["event"]
+
+            try:
+                item["success"] = True
+                item["response"] = list(
+                    generate_long(
+                        model=model, decode_one_token=decode_one_token, **kwargs
+                    )
+                )
+            except Exception as e:
+                item["success"] = False
+                item["response"] = e
+
+            event.set()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    return input_queue
 
 
 @click.command()

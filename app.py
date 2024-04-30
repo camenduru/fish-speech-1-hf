@@ -1,34 +1,26 @@
 import subprocess as sp
 import os
+from huggingface_hub import hf_hub_download
 
 # Download if not exists
 os.makedirs("checkpoints", exist_ok=True)
-
-if not os.path.exists("checkpoints/text2semantic-medium-v1-2k.pth"):
-    print("Downloading text2semantic-medium-v1-2k.pth")
-    sp.run(["wget", "-q", "-O", "checkpoints/text2semantic-medium-v1-2k.pth", os.environ["CKPT_SEMANTIC"]])
-
-if not os.path.exists("checkpoints/vq-gan-group-fsq-2x1024.pth"):
-    print("Downloading vq-gan-group-fsq-2x1024.pth")
-    sp.run(["wget", "-q", "-O", "checkpoints/vq-gan-group-fsq-2x1024.pth", os.environ["CKPT_VQGAN"]])
+hf_hub_download("fishaudio/fish-speech-1", "./checkpoints/fish-speech-1")
 
 print("All checkpoints downloaded")
 
 import html
+import os
+import threading
 from argparse import ArgumentParser
-from io import BytesIO
 from pathlib import Path
 
 import gradio as gr
 import librosa
-import spaces
 import torch
 from loguru import logger
-from torchaudio import functional as AF
 from transformers import AutoTokenizer
 
-from tools.llama.generate import generate_long
-from tools.llama.generate import load_model as load_llama_model
+from tools.llama.generate import launch_thread_safe_queue
 from tools.vqgan.inference import load_model as load_vqgan_model
 
 # Make einx happy
@@ -52,16 +44,30 @@ We are not responsible for any misuse of the model, please consider your local l
 
 TEXTBOX_PLACEHOLDER = """Put your text here. 在此处输入文本."""
 
+try:
+    import spaces
+
+    GPU_DECORATOR = spaces.GPU
+except ImportError:
+
+    def GPU_DECORATOR(func):
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        return wrapper
+
 
 def build_html_error_message(error):
     return f"""
-    <div style="color: red; font-weight: bold;">
+    <div style="color: red; 
+    font-weight: bold;">
         {html.escape(error)}
     </div>
     """
 
 
-@spaces.GPU
+@GPU_DECORATOR
+@torch.inference_mode()
 def inference(
     text,
     enable_reference_audio,
@@ -73,13 +79,10 @@ def inference(
     top_p,
     repetition_penalty,
     temperature,
-    speaker=None,
+    speaker,
 ):
-    if len(reference_text) > 100:
-        return None, "Ref text is too long, please keep it under 100 characters."
-
     if args.max_gradio_length > 0 and len(text) > args.max_gradio_length:
-        return None, "Text is too long, please keep it under 1000 characters."
+        return None, f"Text is too long, please keep it under {args.max_gradio_length} characters."
 
     # Parse reference audio aka prompt
     prompt_tokens = None
@@ -103,11 +106,9 @@ def inference(
         prompt_tokens = vqgan_model.encode(audios, audio_lengths)[0][0]
 
     # LLAMA Inference
-    result = generate_long(
-        model=llama_model,
+    request = dict(
         tokenizer=llama_tokenizer,
         device=vqgan_model.device,
-        decode_one_token=decode_one_token,
         max_new_tokens=max_new_tokens,
         text=text,
         top_k=int(top_k) if top_k > 0 else None,
@@ -123,7 +124,18 @@ def inference(
         prompt_text=reference_text if enable_reference_audio else None,
     )
 
-    codes = next(result)
+    payload = dict(
+        event=threading.Event(),
+        request=request,
+    )
+    llama_queue.put(payload)
+
+    # Wait for the result
+    payload["event"].wait()
+    if payload["success"] is False:
+        raise payload["response"]
+
+    codes = payload["response"][0]
 
     # VQGAN Inference
     feature_lengths = torch.tensor([codes.shape[1]], device=vqgan_model.device)
@@ -151,9 +163,7 @@ def build_app():
         with gr.Row():
             with gr.Column(scale=3):
                 text = gr.Textbox(
-                    label="Input Text / 输入文本",
-                    placeholder=TEXTBOX_PLACEHOLDER,
-                    lines=15,
+                    label="Input Text / 输入文本", placeholder=TEXTBOX_PLACEHOLDER, lines=15
                 )
 
                 with gr.Row():
@@ -198,11 +208,11 @@ def build_app():
                             step=0.01,
                         )
 
-                        # speaker = gr.Textbox(
-                        #     label="Speaker / 说话人",
-                        #     placeholder="Type name of the speaker / 输入说话人的名称",
-                        #     lines=1,
-                        # )
+                        speaker = gr.Textbox(
+                            label="Speaker / 说话人",
+                            placeholder="Type name of the speaker / 输入说话人的名称",
+                            lines=1,
+                        )
 
                     with gr.Tab(label="Reference Audio / 参考音频"):
                         gr.Markdown(
@@ -248,7 +258,7 @@ def build_app():
                 top_p,
                 repetition_penalty,
                 temperature,
-                # speaker,
+                speaker,
             ],
             [audio, error],
             concurrency_limit=1,
@@ -262,10 +272,10 @@ def parse_args():
     parser.add_argument(
         "--llama-checkpoint-path",
         type=Path,
-        default="checkpoints/text2semantic-medium-v1-2k.pth",
+        default="checkpoints/text2semantic-sft-large-v1-4k.pth",
     )
     parser.add_argument(
-        "--llama-config-name", type=str, default="dual_ar_2_codebook_medium"
+        "--llama-config-name", type=str, default="dual_ar_2_codebook_large"
     )
     parser.add_argument(
         "--vqgan-checkpoint-path",
@@ -278,7 +288,7 @@ def parse_args():
     parser.add_argument("--half", action="store_true")
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--compile", action="store_true")
-    parser.add_argument("--max-gradio-length", type=int, default=1024)
+    parser.add_argument("--max-gradio-length", type=int, default=0)
 
     return parser.parse_args()
 
@@ -288,9 +298,15 @@ if __name__ == "__main__":
 
     args.precision = torch.half if args.half else torch.bfloat16
     args.compile = True
+    args.max_gradio_length = 1024
+    args.tokenizer = "./checkpoints/fish-speech-1"
+    args.llama_checkpoint_path = "./checkpoints/text2semantic-sft-large-v1-4k.pth"
+    args.llama_config_name = "dual_ar_2_codebook_large"
+    args.vqgan_checkpoint_path = "./checkpoints/vq-gan-group-fsq-2x1024.pth"
+    args.vqgan_config_name = "vqgan_pretrain"
 
     logger.info("Loading Llama model...")
-    llama_model, decode_one_token = load_llama_model(
+    llama_queue = launch_thread_safe_queue(
         config_name=args.llama_config_name,
         checkpoint_path=args.llama_checkpoint_path,
         device=args.device,
