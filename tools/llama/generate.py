@@ -607,6 +607,7 @@ def launch_thread_safe_queue(
     precision,
     max_length,
     compile=False,
+    init_event=None,
 ):
     input_queue = queue.Queue()
 
@@ -614,6 +615,9 @@ def launch_thread_safe_queue(
         model, decode_one_token = load_model(
             config_name, checkpoint_path, device, precision, max_length, compile=compile
         )
+
+        if init_event is not None:
+            init_event.set()
 
         while True:
             item = input_queue.get()

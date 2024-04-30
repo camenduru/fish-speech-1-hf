@@ -306,7 +306,7 @@ if __name__ == "__main__":
     args.vqgan_config_name = "vqgan_pretrain"
 
     logger.info("Loading Llama model...")
-    hydra.core.global_hydra.GlobalHydra.instance().clear()
+    init_event = threading.Event()
     llama_queue = launch_thread_safe_queue(
         config_name=args.llama_config_name,
         checkpoint_path=args.llama_checkpoint_path,
@@ -314,11 +314,12 @@ if __name__ == "__main__":
         precision=args.precision,
         max_length=args.max_length,
         compile=args.compile,
+        init_event=init_event,
     )
     llama_tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    init_event.wait()
     logger.info("Llama model loaded, loading VQ-GAN model...")
 
-    hydra.core.global_hydra.GlobalHydra.instance().clear()
     vqgan_model = load_vqgan_model(
         config_name=args.vqgan_config_name,
         checkpoint_path=args.vqgan_checkpoint_path,
