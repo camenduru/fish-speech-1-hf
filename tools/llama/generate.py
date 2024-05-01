@@ -47,32 +47,32 @@ def logits_to_probs(
     top_p: Optional[int] = None,
     repetition_penalty: float = 1.0,
 ):
-    if previous_tokens is not None and repetition_penalty != 1.0:
-        previous_tokens = previous_tokens.long()
-        score = torch.gather(logits, dim=0, index=previous_tokens)
-        score = torch.where(
-            score < 0, score * repetition_penalty, score / repetition_penalty
-        )
-        logits.scatter_(dim=0, index=previous_tokens, src=score)
+    # if previous_tokens is not None and repetition_penalty != 1.0:
+    previous_tokens = previous_tokens.long()
+    score = torch.gather(logits, dim=0, index=previous_tokens)
+    score = torch.where(
+        score < 0, score * repetition_penalty, score / repetition_penalty
+    )
+    logits.scatter_(dim=0, index=previous_tokens, src=score)
 
-    if top_p is not None and top_p < 1.0:
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-        cum_probs = torch.cumsum(
-            torch.nn.functional.softmax(sorted_logits, dim=-1), dim=-1
-        )
-        sorted_indices_to_remove = cum_probs > top_p
-        sorted_indices_to_remove[0] = False  # keep at least one option
-        indices_to_remove = sorted_indices_to_remove.scatter(
-            dim=0, index=sorted_indices, src=sorted_indices_to_remove
-        )
-        logits = logits.masked_fill(indices_to_remove, -float("Inf"))
+    # if top_p is not None and top_p < 1.0:
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    cum_probs = torch.cumsum(
+        torch.nn.functional.softmax(sorted_logits, dim=-1), dim=-1
+    )
+    sorted_indices_to_remove = cum_probs > top_p
+    sorted_indices_to_remove[0] = False  # keep at least one option
+    indices_to_remove = sorted_indices_to_remove.scatter(
+        dim=0, index=sorted_indices, src=sorted_indices_to_remove
+    )
+    logits = logits.masked_fill(indices_to_remove, -float("Inf"))
 
     logits = logits / max(temperature, 1e-5)
 
-    if top_k is not None:
-        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-        pivot = v.select(-1, -1).unsqueeze(-1)
-        logits = torch.where(logits < pivot, -float("Inf"), logits)
+    # if top_k is not None:
+    #     v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+    #     pivot = v.select(-1, -1).unsqueeze(-1)
+    #     logits = torch.where(logits < pivot, -float("Inf"), logits)
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
     return probs
@@ -470,16 +470,14 @@ def generate_long(
     texts = split_text(text, chunk_length) if iterative_prompt else [text]
 
     if use_prompt:
-        encoded.append(
-            encode_tokens(
-                tokenizer,
-                prompt_text,
-                prompt_tokens=prompt_tokens,
-                bos=True,
-                device=device,
-                speaker=speaker,
-                num_codebooks=model.config.num_codebooks,
-            )
+        encoded_prompts = encode_tokens(
+            tokenizer,
+            prompt_text,
+            prompt_tokens=prompt_tokens,
+            bos=True,
+            device=device,
+            speaker=speaker,
+            num_codebooks=model.config.num_codebooks,
         )
 
     for idx, text in enumerate(texts):
@@ -500,10 +498,6 @@ def generate_long(
         global_encoded = []
         all_codes = []
         seg_idx = 0
-
-        if use_prompt:
-            seg_idx = 1
-            global_encoded.append(encoded[0])
 
         while seg_idx < len(encoded):
             logger.info(
@@ -530,6 +524,9 @@ def generate_long(
                 partial_encoded = global_encoded[:2] + global_encoded[-i:]
             else:
                 partial_encoded = global_encoded
+
+            if use_prompt:
+                partial_encoded = [encoded_prompts] + partial_encoded
 
             cat_encoded = torch.cat(partial_encoded, dim=1)
             prompt_length = cat_encoded.size(1)
@@ -593,12 +590,11 @@ def generate_long(
 
         if is_streaming:
             # This indicates the end of the current sample
-            yield None
+            yield "next"
         else:
             all_codes = torch.cat(all_codes, dim=1)
             assert (all_codes >= 0).all(), f"Negative code found: {codes}"
             yield all_codes
-
 
 
 def launch_thread_safe_queue(
@@ -624,20 +620,21 @@ def launch_thread_safe_queue(
                 break
 
             kwargs = item["request"]
-            event = item["event"]
+            response_queue = item["response_queue"]
 
             try:
                 item["success"] = True
-                item["response"] = list(
-                    generate_long(
-                        model=model, decode_one_token=decode_one_token, **kwargs
-                    )
-                )
+                for chunk in generate_long(
+                    model=model, decode_one_token=decode_one_token, **kwargs
+                ):
+                    response_queue.put(chunk)
+
+                response_queue.put("done")
             except Exception as e:
                 item["success"] = False
                 item["response"] = e
 
-            event.set()
+                response_queue.put("done")
 
     threading.Thread(target=worker, daemon=True).start()
     init_event.wait()
