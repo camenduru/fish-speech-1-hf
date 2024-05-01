@@ -47,13 +47,13 @@ def logits_to_probs(
     top_p: Optional[int] = None,
     repetition_penalty: float = 1.0,
 ):
-    # if previous_tokens is not None and repetition_penalty != 1.0:
-    previous_tokens = previous_tokens.long()
-    score = torch.gather(logits, dim=0, index=previous_tokens)
-    score = torch.where(
-        score < 0, score * repetition_penalty, score / repetition_penalty
-    )
-    logits.scatter_(dim=0, index=previous_tokens, src=score)
+    if previous_tokens is not None:
+        previous_tokens = previous_tokens.long()
+        score = torch.gather(logits, dim=0, index=previous_tokens)
+        score = torch.where(
+            score < 0, score * repetition_penalty, score / repetition_penalty
+        )
+        logits.scatter_(dim=0, index=previous_tokens, src=score)
 
     # if top_p is not None and top_p < 1.0:
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
