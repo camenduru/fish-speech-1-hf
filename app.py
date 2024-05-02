@@ -41,6 +41,9 @@ Related code are released under BSD-3-Clause License, and weights are released u
 
 We are not responsible for any misuse of the model, please consider your local laws and regulations before using it.  
 我们不对模型的任何滥用负责，请在使用之前考虑您当地的法律法规.
+
+The model running in this WebUI is Fish Speech V1 Medium SFT 4K.
+在此 WebUI 中运行的模型是 Fish Speech V1 Medium SFT 4K.
 """
 
 TEXTBOX_PLACEHOLDER = """Put your text here. 在此处输入文本."""
@@ -76,7 +79,6 @@ def inference(
     reference_text,
     max_new_tokens,
     chunk_length,
-    top_k,
     top_p,
     repetition_penalty,
     temperature,
@@ -112,7 +114,6 @@ def inference(
         device=vqgan_model.device,
         max_new_tokens=max_new_tokens,
         text=text,
-        top_k=int(top_k) if top_k > 0 else None,
         top_p=top_p,
         repetition_penalty=repetition_penalty,
         temperature=temperature,
@@ -194,10 +195,6 @@ def build_app():
                             step=8,
                         )
 
-                        top_k = gr.Slider(
-                            label="Top-K", minimum=0, maximum=5, value=0, step=1
-                        )
-
                         top_p = gr.Slider(
                             label="Top-P", minimum=0, maximum=1, value=0.7, step=0.01
                         )
@@ -264,7 +261,6 @@ def build_app():
                 reference_text,
                 max_new_tokens,
                 chunk_length,
-                top_k,
                 top_p,
                 repetition_penalty,
                 temperature,
@@ -310,8 +306,8 @@ if __name__ == "__main__":
     args.compile = True
     args.max_gradio_length = 1024
     args.tokenizer = "./checkpoints/fish-speech-1"
-    args.llama_checkpoint_path = "./checkpoints/fish-speech-1/text2semantic-sft-large-v1-4k.pth"
-    args.llama_config_name = "dual_ar_2_codebook_large"
+    args.llama_checkpoint_path = "./checkpoints/fish-speech-1/text2semantic-sft-medium-v1-4k.pth"
+    args.llama_config_name = "dual_ar_2_codebook_medium"
     args.vqgan_checkpoint_path = "./checkpoints/fish-speech-1/vq-gan-group-fsq-2x1024.pth"
     args.vqgan_config_name = "vqgan_pretrain"
 
@@ -343,7 +339,6 @@ if __name__ == "__main__":
         reference_text="",
         max_new_tokens=0,
         chunk_length=0,
-        top_k=0,  # 0 means no limit
         top_p=0.7,
         repetition_penalty=1.5,
         temperature=0.7,
