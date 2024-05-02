@@ -141,7 +141,7 @@ def inference(
 
         if result == "done":
             if payload["success"] is False:
-                return None, build_html_error_message(payload["error"])
+                return None, build_html_error_message(payload["response"])
             break
 
         codes.append(result)
