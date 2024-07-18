@@ -30,6 +30,9 @@ os.environ["EINX_FILTER_TRACEBACK"] = "false"
 
 HEADER_MD = """# Fish Speech
 
+## The demo in this space is version 1.0, Please check [Fish Audio](https://fish.audio) for the best model.
+## 该 Demo 为 Fish Speech 1.0 版本, 请在 [Fish Audio](https://fish.audio) 体验最新 DEMO.
+
 A text-to-speech model based on VQ-GAN and Llama developed by [Fish Audio](https://fish.audio).  
 由 [Fish Audio](https://fish.audio) 研发的基于 VQ-GAN 和 Llama 的多语种语音合成. 
 
