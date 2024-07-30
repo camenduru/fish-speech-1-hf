@@ -17,6 +17,7 @@ trainer:
   devices: auto
   strategy:
     _target_: lightning.pytorch.strategies.DDPStrategy
+    process_group_backend: nccl  # This should be override when training on windows
 
   precision: bf16-mixed
 

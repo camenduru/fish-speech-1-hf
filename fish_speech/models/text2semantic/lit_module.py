@@ -1,23 +1,15 @@
-from dataclasses import dataclass
 from typing import Any, Optional
 
 import lightning as L
-import loralib as lora
 import torch
 import torch.nn.functional as F
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
 import fish_speech.utils as utils
+from fish_speech.conversation import CODEBOOK_PAD_TOKEN_ID
 from fish_speech.models.text2semantic.llama import NaiveTransformer
 
 log = utils.RankedLogger(__name__, rank_zero_only=True)
-
-
-@dataclass
-class LoraConfig:
-    r: int
-    lora_alpha: float
-    lora_dropout: float = 0.0
 
 
 class TextToSemantic(L.LightningModule):
@@ -26,85 +18,23 @@ class TextToSemantic(L.LightningModule):
         model: NaiveTransformer,
         optimizer: Any,
         lr_scheduler: Any,
-        lora_config: Optional[LoraConfig] = None,
-        save_lora_only: bool = False,
-        use_dpo: bool = False,
-        dpo_beta: float = 0.2,
     ):
         super().__init__()
 
         self.model = model
         self.optimizer_builder = optimizer
         self.lr_scheduler_builder = lr_scheduler
-        self.lora_config = lora_config
-        self.save_lora_only = save_lora_only
-        self.use_dpo = use_dpo  # We don't support reference model yet
-        self.dpo_beta = dpo_beta
-
-        if self.lora_config is not None:
-            self.setup_lora()
-
-    def setup_lora(self):
-        # Replace the embedding layer with a LoRA layer
-        self.model.embeddings = lora.Embedding(
-            num_embeddings=self.model.embeddings.num_embeddings,
-            embedding_dim=self.model.embeddings.embedding_dim,
-            padding_idx=self.model.embeddings.padding_idx,
-            r=self.lora_config.r,
-            lora_alpha=self.lora_config.lora_alpha,
-        )
-
-        # Replace output layer with a LoRA layer
-        linears = [(self.model, "output")]
-
-        # Replace all linear layers with LoRA layers
-        for layer in self.model.layers:
-            linears.extend([(layer.attention, "wqkv"), (layer.attention, "wo")])
-            linears.extend(
-                [
-                    (layer.feed_forward, "w1"),
-                    (layer.feed_forward, "w2"),
-                    (layer.feed_forward, "w3"),
-                ]
-            )
-
-        if hasattr(self.model, "fast_layers"):
-            # Dual-AR model
-            linears.extend([(self.model, "fast_output")])
-
-            for layer in self.model.fast_layers:
-                linears.extend([(layer.attention, "wqkv"), (layer.attention, "wo")])
-                linears.extend(
-                    [
-                        (layer.feed_forward, "w1"),
-                        (layer.feed_forward, "w2"),
-                        (layer.feed_forward, "w3"),
-                    ]
-                )
-
-        for module, layer in linears:
-            updated_linear = lora.Linear(
-                in_features=getattr(module, layer).in_features,
-                out_features=getattr(module, layer).out_features,
-                bias=getattr(module, layer).bias,
-                r=self.lora_config.r,
-                lora_alpha=self.lora_config.lora_alpha,
-                lora_dropout=self.lora_config.lora_dropout,
-            )
-            setattr(module, layer, updated_linear)
-
-        # Mark only the LoRA layers as trainable
-        lora.mark_only_lora_as_trainable(self.model, bias="lora_only")
 
     def forward(self, x):
         return self.model(x)
 
     def on_save_checkpoint(self, checkpoint):
-        if self.lora_config is None or self.save_lora_only is False:
-            return
-
         # Save only LoRA parameters
         state_dict = checkpoint["state_dict"]
+        use_lora = any("lora" in name for name in state_dict.keys())
+        if not use_lora:
+            return
+
         for name in list(state_dict.keys()):
             if "lora" not in name:
                 state_dict.pop(name)
@@ -178,6 +108,11 @@ class TextToSemantic(L.LightningModule):
     def _step(self, batch, batch_idx, stage: str):
         is_train = stage == "train"
 
+        if is_train:
+            # Key part to make lora work
+            # Otherwise the parameters are merged, which lead to incorrect gradients
+            self.model.train()
+
         # Do positive and negative samples in the same batch to speed up training
         labels = batch["labels"]
         outputs = self.model(
@@ -187,91 +122,21 @@ class TextToSemantic(L.LightningModule):
         token_logits = outputs.token_logits
         codebook_logits = outputs.codebook_logits
 
-        if self.use_dpo:
-            # Firtst half is positive, second half is negative
-            token_logits, negative_token_logits = token_logits.chunk(2)
-            codebook_logits, negative_codebook_logits = codebook_logits.chunk(2)
-            labels, negative_labels = labels.chunk(2)
-
         # Generate labels
         base_loss = F.cross_entropy(
-            token_logits.reshape(-1, token_logits.size(-1)),
+            token_logits.view(-1, token_logits.size(-1)),
             labels[:, 0].reshape(-1),
             ignore_index=-100,
         )
 
         codebook_labels = labels[:, 1 : 1 + self.model.config.num_codebooks].mT
         semantic_loss = F.cross_entropy(
-            codebook_logits.reshape(-1, codebook_logits.size(-1)),
+            codebook_logits.view(-1, codebook_logits.size(-1)),
             codebook_labels.reshape(-1),
             ignore_index=-100,
         )
 
         loss = base_loss + semantic_loss
-
-        # If we use dpo
-        if self.use_dpo:
-            negative_codebook_labels = negative_labels[
-                :, 1 : 1 + self.model.config.num_codebooks
-            ].mT
-
-            positive_codebook_logps = self.get_batch_logps(
-                codebook_logits, codebook_labels
-            )
-            negative_codebook_logps = self.get_batch_logps(
-                negative_codebook_logits, negative_codebook_labels
-            )
-
-            # TODO: implement the reference model, avoid screwing up the gradients
-            dpo_loss = -F.logsigmoid(
-                (positive_codebook_logps - negative_codebook_logps) * self.dpo_beta
-            ).mean()
-
-            chosen_rewards = self.dpo_beta * positive_codebook_logps.detach()
-            rejected_rewards = self.dpo_beta * negative_codebook_logps.detach()
-            reward_accuracy = (chosen_rewards > rejected_rewards).float().mean()
-            chosen_rewards, rejected_rewards = (
-                chosen_rewards.mean(),
-                rejected_rewards.mean(),
-            )
-
-            loss = loss + dpo_loss
-
-            self.log(
-                f"{stage}/dpo_loss",
-                dpo_loss,
-                on_step=is_train,
-                on_epoch=not is_train,
-                prog_bar=False,
-                logger=True,
-            )
-
-            self.log(
-                f"{stage}/chosen_rewards",
-                chosen_rewards,
-                on_step=is_train,
-                on_epoch=not is_train,
-                prog_bar=False,
-                logger=True,
-            )
-
-            self.log(
-                f"{stage}/rejected_rewards",
-                rejected_rewards,
-                on_step=is_train,
-                on_epoch=not is_train,
-                prog_bar=False,
-                logger=True,
-            )
-
-            self.log(
-                f"{stage}/reward_accuracy",
-                reward_accuracy,
-                on_step=is_train,
-                on_epoch=not is_train,
-                prog_bar=False,
-                logger=True,
-            )
 
         self.log(
             f"{stage}/loss",
@@ -280,6 +145,7 @@ class TextToSemantic(L.LightningModule):
             on_epoch=not is_train,
             prog_bar=True,
             logger=True,
+            sync_dist=not is_train,
         )
 
         self.log(
@@ -289,6 +155,7 @@ class TextToSemantic(L.LightningModule):
             on_epoch=not is_train,
             prog_bar=False,
             logger=True,
+            sync_dist=not is_train,
         )
 
         self.log(
@@ -298,6 +165,7 @@ class TextToSemantic(L.LightningModule):
             on_epoch=not is_train,
             prog_bar=False,
             logger=True,
+            sync_dist=not is_train,
         )
 
         # Top-5 accuracy
@@ -309,31 +177,21 @@ class TextToSemantic(L.LightningModule):
             on_epoch=not is_train,
             prog_bar=True,
             logger=True,
+            sync_dist=not is_train,
         )
-
-        if self.model.config.num_codebooks != self.model.config.num_in_codebooks:
-            accuracy = self.get_accuracy(
-                codebook_logits[:, :, : self.model.config.num_in_codebooks],
-                codebook_labels[:, :, : self.model.config.num_in_codebooks],
-            )
-
-            self.log(
-                f"{stage}/top_5_accuracy_in",
-                accuracy,
-                on_step=is_train,
-                on_epoch=not is_train,
-                prog_bar=True,
-                logger=True,
-            )
 
         return loss
 
     def get_accuracy(self, logits, labels):
+        mask = (labels != -100) & (labels != CODEBOOK_PAD_TOKEN_ID)
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=logits.device)
+
         _, indices = logits.topk(5, dim=-1)
         correct = indices.eq(labels.unsqueeze(-1))
-        correct[labels == -100] = 0
+        correct[~mask] = 0
         correct = correct.sum()
-        accuracy = correct / (labels != -100).sum()
+        accuracy = correct / mask.sum()
 
         return accuracy
 
