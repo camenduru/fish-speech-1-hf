@@ -21,5 +21,6 @@ pyrootutils>=1.0.4
 vector_quantize_pytorch>=1.14.7
 samplerate>=0.2.1
 resampy>=0.4.3
-spaces>=0.26.1"
+spaces>=0.26.1
 einx[torch]==0.2.0
+opencc
