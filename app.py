@@ -2,6 +2,7 @@ import os
 import queue
 from huggingface_hub import snapshot_download
 import hydra
+import numpy as np
 
 # Download if not exists
 os.makedirs("checkpoints", exist_ok=True)
