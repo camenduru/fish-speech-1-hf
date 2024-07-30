@@ -197,7 +197,6 @@ def inference_with_auto_rerank(
     use_auto_rerank,
     streaming=False,
 ):
-
     max_attempts = 2 if use_auto_rerank else 1
     best_wer = float("inf")
     best_audio = None
@@ -218,9 +217,14 @@ def inference_with_auto_rerank(
         )
 
         # 获取音频数据
-        for _ in audio_generator:
-            pass
-        _, (sample_rate, audio), message = _
+        result = None
+        for item in audio_generator:
+            result = item
+        
+        if result is None:
+            return None, None, "No audio generated"
+
+        _, (sample_rate, audio), message = result
 
         if audio is None:
             return None, None, message
@@ -242,6 +246,7 @@ def inference_with_auto_rerank(
             break
 
     return None, (best_sample_rate, best_audio), None
+
 
 n_audios = 4
 
