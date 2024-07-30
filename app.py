@@ -97,12 +97,13 @@ def inference(
     top_p,
     repetition_penalty,
     temperature,
+    streaming=False
 ):
     if args.max_gradio_length > 0 and len(text) > args.max_gradio_length:
         return (
             None,
             None,
-            i18n("Text is too long, please keep it under {} characters.").format(
+            "Text is too long, please keep it under {} characters.".format(
                 args.max_gradio_length
             ),
         )
