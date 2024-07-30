@@ -3,6 +3,10 @@ import queue
 from huggingface_hub import snapshot_download
 import hydra
 import numpy as np
+import wave
+import io
+import pyrootutils
+import gc
 
 # Download if not exists
 os.makedirs("checkpoints", exist_ok=True)
@@ -203,7 +207,7 @@ def inference_with_auto_rerank(
     best_sample_rate = None
 
     for attempt in range(max_attempts):
-        audio_generator = inference(
+        _, (sample_rate, audio), message = inference(
             text,
             enable_reference_audio,
             reference_audio,
@@ -216,16 +220,6 @@ def inference_with_auto_rerank(
             streaming=False,
         )
 
-        # 获取音频数据
-        result = None
-        for item in audio_generator:
-            result = item
-        
-        if result is None:
-            return None, None, "No audio generated"
-
-        _, (sample_rate, audio), message = result
-
         if audio is None:
             return None, None, message
 
@@ -234,6 +228,7 @@ def inference_with_auto_rerank(
 
         asr_result = batch_asr(asr_model, [audio], sample_rate)[0]
         wer = calculate_wer(text, asr_result["text"])
+        
         if wer <= 0.3 and not asr_result["huge_gap"]:
             return None, (sample_rate, audio), None
 
@@ -252,7 +247,6 @@ n_audios = 4
 
 global_audio_list = []
 global_error_list = []
-
 
 def inference_wrapper(
     text,
