@@ -14,6 +14,7 @@ import os
 import threading
 from argparse import ArgumentParser
 from pathlib import Path
+from functools import partial
 
 import gradio as gr
 import librosa
