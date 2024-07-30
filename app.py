@@ -241,9 +241,6 @@ def inference_with_auto_rerank(
 
     return None, (best_sample_rate, best_audio), None
 
-
-inference_stream = partial(inference, streaming=True)
-
 n_audios = 4
 
 global_audio_list = []
