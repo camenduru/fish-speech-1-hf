@@ -95,13 +95,12 @@ def inference(
     top_p,
     repetition_penalty,
     temperature,
-    streaming=False,
 ):
     if args.max_gradio_length > 0 and len(text) > args.max_gradio_length:
         return (
             None,
             None,
-            "Text is too long, please keep it under {} characters.".format(
+            i18n("Text is too long, please keep it under {} characters.").format(
                 args.max_gradio_length
             ),
         )
@@ -137,16 +136,12 @@ def inference(
         )
     )
 
-    if streaming:
-        yield wav_chunk_header(), None, None
-
     segments = []
 
     while True:
         result: WrappedGenerateResponse = response_queue.get()
         if result.status == "error":
-            yield None, None, build_html_error_message(result.response)
-            break
+            return None, None, build_html_error_message(result.response)
 
         result: GenerateResponse = result.response
         if result.action == "next":
@@ -168,9 +163,6 @@ def inference(
         fake_audios = fake_audios.float().cpu().numpy()
         segments.append(fake_audios)
 
-        if streaming:
-            yield (fake_audios * 32768).astype(np.int16).tobytes(), None, None
-
     if len(segments) == 0:
         return (
             None,
@@ -180,9 +172,9 @@ def inference(
             ),
         )
 
-    # No matter streaming or not, we need to return the final audio
+    # Return the final audio
     audio = np.concatenate(segments, axis=0)
-    yield None, (decoder_model.spec_transform.sample_rate, audio), None
+    return None, (decoder_model.spec_transform.sample_rate, audio), None
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
