@@ -552,23 +552,6 @@ def build_app():
             [stream_audio, *global_audio_list, *global_error_list],
             concurrency_limit=1,
         )
-
-        generate_stream.click(
-            inference_stream,
-            [
-                refined_text,
-                enable_reference_audio,
-                reference_audio,
-                reference_text,
-                max_new_tokens,
-                chunk_length,
-                top_p,
-                repetition_penalty,
-                temperature,
-            ],
-            [stream_audio, global_audio_list[0], global_error_list[0]],
-            concurrency_limit=10,
-        )
     return app
 
 
