@@ -56,8 +56,8 @@ HEADER_MD = """# Fish Speech
 A text-to-speech model based on VQ-GAN and Llama developed by [Fish Audio](https://fish.audio).  
 由 [Fish Audio](https://fish.audio) 研发的基于 VQ-GAN 和 Llama 的多语种语音合成. 
 
-You can find the source code [here](https://github.com/fishaudio/fish-speech) and models [here](https://huggingface.co/fishaudio/fish-speech-1).  
-你可以在 [这里](https://github.com/fishaudio/fish-speech) 找到源代码和 [这里](https://huggingface.co/fishaudio/fish-speech-1) 找到模型.  
+You can find the source code [here](https://github.com/fishaudio/fish-speech) and models [here](https://huggingface.co/fishaudio/fish-speech-1.4).  
+你可以在 [这里](https://github.com/fishaudio/fish-speech) 找到源代码和 [这里](https://huggingface.co/fishaudio/fish-speech-1.4) 找到模型.  
 
 Related code and weights are released under CC BY-NC-SA 4.0 License.  
 相关代码，权重使用 CC BY-NC-SA 4.0 许可证发布.
