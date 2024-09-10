@@ -406,7 +406,7 @@ def build_app():
                             label="Iterative Prompt Length, 0 means off",
                             minimum=0,
                             maximum=500,
-                            value=100,
+                            value=200,
                             step=8,
                         )
 
@@ -574,7 +574,7 @@ def parse_args():
     parser.add_argument("--decoder-config-name", type=str, default="firefly_gan_vq")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--half", action="store_true")
-    parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--compile", action="store_true",default=True)
     parser.add_argument("--max-gradio-length", type=int, default=0)
     parser.add_argument("--theme", type=str, default="light")
 

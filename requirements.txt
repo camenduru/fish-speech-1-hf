@@ -26,3 +26,4 @@ einx[torch]==0.2.0
 opencc
 faster-whisper
 ormsgpack
+ffmpeg
