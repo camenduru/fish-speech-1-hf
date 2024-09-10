@@ -24,6 +24,10 @@ from functools import partial
 import gradio as gr
 import librosa
 import torch
+import torchaudio
+
+torchaudio.set_audio_backend("ffmpeg")
+
 from loguru import logger
 from transformers import AutoTokenizer
 
