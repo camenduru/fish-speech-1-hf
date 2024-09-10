@@ -1,4 +1,7 @@
 import os
+
+os.environ["TORCHAUDIO_USE_FFMPEG"] = "1"
+
 import queue
 from huggingface_hub import snapshot_download
 import hydra
