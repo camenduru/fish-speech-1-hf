@@ -27,3 +27,4 @@ opencc
 faster-whisper
 ormsgpack
 ffmpeg
+soundfile
