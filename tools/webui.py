@@ -1,35 +1,27 @@
+import gc
+import html
+import io
 import os
 import queue
-from huggingface_hub import snapshot_download
-import hydra
-import numpy as np
 import wave
-import io
-import pyrootutils
-import gc
-
-# Download if not exists
-os.makedirs("checkpoints", exist_ok=True)
-snapshot_download(repo_id="fishaudio/fish-speech-1.4", local_dir="./checkpoints/fish-speech-1.4")
-
-print("All checkpoints downloaded")
-
-import html
-import os
-import threading
 from argparse import ArgumentParser
-from pathlib import Path
 from functools import partial
+from pathlib import Path
 
 import gradio as gr
 import librosa
+import numpy as np
+import pyrootutils
 import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
-from tools.llama.generate import launch_thread_safe_queue
-from tools.vqgan.inference import load_model as load_vqgan_model
+pyrootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+
+from fish_speech.i18n import i18n
 from fish_speech.text.chn_text_norm.text import Text as ChnNormedText
+from fish_speech.utils import autocast_exclude_mps
 from tools.api import decode_vq_tokens, encode_reference
 from tools.auto_rerank import batch_asr, calculate_wer, is_chinese, load_model
 from tools.llama.generate import (
@@ -44,52 +36,30 @@ from tools.vqgan.inference import load_model as load_decoder_model
 os.environ["EINX_FILTER_TRACEBACK"] = "false"
 
 
-HEADER_MD = """# Fish Speech
+HEADER_MD = f"""# Fish Speech
 
-## The demo in this space is version 1.4, Please check [Fish Audio](https://fish.audio) for the best model.
-## 该 Demo 为 Fish Speech 1.4 版本, 请在 [Fish Audio](https://fish.audio) 体验最新 DEMO.
+{i18n("A text-to-speech model based on VQ-GAN and Llama developed by [Fish Audio](https://fish.audio).")}  
 
-A text-to-speech model based on VQ-GAN and Llama developed by [Fish Audio](https://fish.audio).  
-由 [Fish Audio](https://fish.audio) 研发的基于 VQ-GAN 和 Llama 的多语种语音合成. 
+{i18n("You can find the source code [here](https://github.com/fishaudio/fish-speech) and models [here](https://huggingface.co/fishaudio/fish-speech-1.4).")}  
 
-You can find the source code [here](https://github.com/fishaudio/fish-speech) and models [here](https://huggingface.co/fishaudio/fish-speech-1).  
-你可以在 [这里](https://github.com/fishaudio/fish-speech) 找到源代码和 [这里](https://huggingface.co/fishaudio/fish-speech-1) 找到模型.  
+{i18n("Related code and weights are released under CC BY-NC-SA 4.0 License.")}  
 
-Related code and weights are released under CC BY-NC-SA 4.0 License.  
-相关代码，权重使用 CC BY-NC-SA 4.0 许可证发布.
-
-We are not responsible for any misuse of the model, please consider your local laws and regulations before using it.  
-我们不对模型的任何滥用负责，请在使用之前考虑您当地的法律法规.
-
-The model running in this WebUI is Fish Speech V1.4 Medium.
-在此 WebUI 中运行的模型是 Fish Speech V1.4 Medium.
+{i18n("We are not responsible for any misuse of the model, please consider your local laws and regulations before using it.")}  
 """
 
-TEXTBOX_PLACEHOLDER = """Put your text here. 在此处输入文本."""
-
-try:
-    import spaces
-
-    GPU_DECORATOR = spaces.GPU
-except ImportError:
-
-    def GPU_DECORATOR(func):
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        return wrapper
+TEXTBOX_PLACEHOLDER = i18n("Put your text here.")
+SPACE_IMPORTED = False
 
 
 def build_html_error_message(error):
     return f"""
     <div style="color: red; 
     font-weight: bold;">
-        {html.escape(error)}
+        {html.escape(str(error))}
     </div>
     """
 
 
-@GPU_DECORATOR
 @torch.inference_mode()
 def inference(
     text,
@@ -101,13 +71,13 @@ def inference(
     top_p,
     repetition_penalty,
     temperature,
-    streaming=False
+    streaming=False,
 ):
     if args.max_gradio_length > 0 and len(text) > args.max_gradio_length:
         return (
             None,
             None,
-            "Text is too long, please keep it under {} characters.".format(
+            i18n("Text is too long, please keep it under {} characters.").format(
                 args.max_gradio_length
             ),
         )
@@ -143,24 +113,23 @@ def inference(
         )
     )
 
+    if streaming:
+        yield wav_chunk_header(), None, None
+
     segments = []
 
     while True:
         result: WrappedGenerateResponse = response_queue.get()
         if result.status == "error":
-            return None, None, build_html_error_message(result.response)
+            yield None, None, build_html_error_message(result.response)
+            break
 
         result: GenerateResponse = result.response
         if result.action == "next":
             break
 
-        with torch.autocast(
-            device_type=(
-                "cpu"
-                if decoder_model.device.type == "mps"
-                else decoder_model.device.type
-            ),
-            dtype=args.precision,
+        with autocast_exclude_mps(
+            device_type=decoder_model.device.type, dtype=args.precision
         ):
             fake_audios = decode_vq_tokens(
                 decoder_model=decoder_model,
@@ -170,18 +139,21 @@ def inference(
         fake_audios = fake_audios.float().cpu().numpy()
         segments.append(fake_audios)
 
+        if streaming:
+            yield (fake_audios * 32768).astype(np.int16).tobytes(), None, None
+
     if len(segments) == 0:
         return (
             None,
             None,
             build_html_error_message(
-                "No audio generated, please check the input text."
+                i18n("No audio generated, please check the input text.")
             ),
         )
 
-    # Return the final audio
+    # No matter streaming or not, we need to return the final audio
     audio = np.concatenate(segments, axis=0)
-    return None, (decoder_model.spec_transform.sample_rate, audio), None
+    yield None, (decoder_model.spec_transform.sample_rate, audio), None
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -201,13 +173,14 @@ def inference_with_auto_rerank(
     use_auto_rerank,
     streaming=False,
 ):
+
     max_attempts = 2 if use_auto_rerank else 1
     best_wer = float("inf")
     best_audio = None
     best_sample_rate = None
 
     for attempt in range(max_attempts):
-        _, (sample_rate, audio), message = inference(
+        audio_generator = inference(
             text,
             enable_reference_audio,
             reference_audio,
@@ -220,6 +193,11 @@ def inference_with_auto_rerank(
             streaming=False,
         )
 
+        # 获取音频数据
+        for _ in audio_generator:
+            pass
+        _, (sample_rate, audio), message = _
+
         if audio is None:
             return None, None, message
 
@@ -228,7 +206,6 @@ def inference_with_auto_rerank(
 
         asr_result = batch_asr(asr_model, [audio], sample_rate)[0]
         wer = calculate_wer(text, asr_result["text"])
-        
         if wer <= 0.3 and not asr_result["huge_gap"]:
             return None, (sample_rate, audio), None
 
@@ -243,10 +220,13 @@ def inference_with_auto_rerank(
     return None, (best_sample_rate, best_audio), None
 
 
+inference_stream = partial(inference, streaming=True)
+
 n_audios = 4
 
 global_audio_list = []
 global_error_list = []
+
 
 def inference_wrapper(
     text,
@@ -373,41 +353,42 @@ def build_app():
         with gr.Row():
             with gr.Column(scale=3):
                 text = gr.Textbox(
-                    label="Input Text", placeholder=TEXTBOX_PLACEHOLDER, lines=10
+                    label=i18n("Input Text"), placeholder=TEXTBOX_PLACEHOLDER, lines=10
                 )
                 refined_text = gr.Textbox(
-                    label="Realtime Transform Text",
-                    placeholder=
-                        "Normalization Result Preview (Currently Only Chinese)",
+                    label=i18n("Realtime Transform Text"),
+                    placeholder=i18n(
+                        "Normalization Result Preview (Currently Only Chinese)"
+                    ),
                     lines=5,
                     interactive=False,
                 )
 
                 with gr.Row():
                     if_refine_text = gr.Checkbox(
-                        label="Text Normalization",
-                        value=True,
+                        label=i18n("Text Normalization"),
+                        value=False,
                         scale=1,
                     )
 
                     if_load_asr_model = gr.Checkbox(
-                        label="Load / Unload ASR model for auto-reranking",
+                        label=i18n("Load / Unload ASR model for auto-reranking"),
                         value=False,
                         scale=3,
                     )
 
                 with gr.Row():
-                    with gr.Tab(label="Advanced Config"):
+                    with gr.Tab(label=i18n("Advanced Config")):
                         chunk_length = gr.Slider(
-                            label="Iterative Prompt Length, 0 means off",
-                            minimum=0,
-                            maximum=500,
-                            value=100,
+                            label=i18n("Iterative Prompt Length, 0 means off"),
+                            minimum=50,
+                            maximum=300,
+                            value=200,
                             step=8,
                         )
 
                         max_new_tokens = gr.Slider(
-                            label="Maximum tokens per batch, 0 means no limit",
+                            label=i18n("Maximum tokens per batch, 0 means no limit"),
                             minimum=0,
                             maximum=2048,
                             value=1024,  # 0 means no limit
@@ -423,7 +404,7 @@ def build_app():
                         )
 
                         repetition_penalty = gr.Slider(
-                            label="Repetition Penalty",
+                            label=i18n("Repetition Penalty"),
                             minimum=1,
                             maximum=1.5,
                             value=1.2,
@@ -438,32 +419,34 @@ def build_app():
                             step=0.01,
                         )
 
-                    with gr.Tab(label="Reference Audio"):
+                    with gr.Tab(label=i18n("Reference Audio")):
                         gr.Markdown(
+                            i18n(
                                 "5 to 10 seconds of reference audio, useful for specifying speaker."
+                            )
                         )
 
                         enable_reference_audio = gr.Checkbox(
-                            label="Enable Reference Audio",
+                            label=i18n("Enable Reference Audio"),
                         )
                         reference_audio = gr.Audio(
-                            label="Reference Audio",
+                            label=i18n("Reference Audio"),
                             type="filepath",
                         )
                         with gr.Row():
                             if_auto_label = gr.Checkbox(
-                                label="Auto Labeling",
+                                label=i18n("Auto Labeling"),
                                 min_width=100,
                                 scale=0,
                                 value=False,
                             )
                             reference_text = gr.Textbox(
-                                label="Reference Text",
+                                label=i18n("Reference Text"),
                                 lines=1,
                                 placeholder="在一无所知中，梦里的一天结束了，一个新的「轮回」便会开始。",
                                 value="",
                             )
-                    with gr.Tab(label="Batch Inference"):
+                    with gr.Tab(label=i18n("Batch Inference")):
                         batch_infer_num = gr.Slider(
                             label="Batch infer nums",
                             minimum=1,
@@ -476,13 +459,13 @@ def build_app():
                 for _ in range(n_audios):
                     with gr.Row():
                         error = gr.HTML(
-                            label="Error Message",
+                            label=i18n("Error Message"),
                             visible=True if _ == 0 else False,
                         )
                         global_error_list.append(error)
                     with gr.Row():
                         audio = gr.Audio(
-                            label="Generated Audio",
+                            label=i18n("Generated Audio"),
                             type="numpy",
                             interactive=False,
                             visible=True if _ == 0 else False,
@@ -491,7 +474,7 @@ def build_app():
 
                 with gr.Row():
                     stream_audio = gr.Audio(
-                        label="Streaming Audio",
+                        label=i18n("Streaming Audio"),
                         streaming=True,
                         autoplay=True,
                         interactive=False,
@@ -500,10 +483,10 @@ def build_app():
                 with gr.Row():
                     with gr.Column(scale=3):
                         generate = gr.Button(
-                            value="\U0001F3A7 " + "Generate", variant="primary"
+                            value="\U0001F3A7 " + i18n("Generate"), variant="primary"
                         )
                         generate_stream = gr.Button(
-                            value="\U0001F3A7 " + "Streaming Generate",
+                            value="\U0001F3A7 " + i18n("Streaming Generate"),
                             variant="primary",
                         )
 
@@ -551,6 +534,23 @@ def build_app():
             ],
             [stream_audio, *global_audio_list, *global_error_list],
             concurrency_limit=1,
+        )
+
+        generate_stream.click(
+            inference_stream,
+            [
+                refined_text,
+                enable_reference_audio,
+                reference_audio,
+                reference_text,
+                max_new_tokens,
+                chunk_length,
+                top_p,
+                repetition_penalty,
+                temperature,
+            ],
+            [stream_audio, global_audio_list[0], global_error_list[0]],
+            concurrency_limit=10,
         )
     return app
 
