@@ -1,7 +1,4 @@
 import os
-
-os.environ["TORCHAUDIO_USE_FFMPEG"] = "1"
-
 import queue
 from huggingface_hub import snapshot_download
 import hydra
@@ -29,7 +26,7 @@ import librosa
 import torch
 import torchaudio
 
-torchaudio.set_audio_backend("ffmpeg")
+torchaudio.set_audio_backend("soundfile")
 
 from loguru import logger
 from transformers import AutoTokenizer
