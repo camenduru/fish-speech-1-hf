@@ -389,8 +389,8 @@ def build_app():
 
                 with gr.Row():
                     if_refine_text = gr.Checkbox(
-                        label="Text Normalization",
-                        value=True,
+                        label="Text Normalization (ZH)",
+                        value=False,
                         scale=1,
                     )
 
