@@ -442,31 +442,40 @@ def build_app():
                             step=0.01,
                         )
 
-                    with gr.Tab(label="Reference Audio"):
-                        gr.Markdown(
-                                "5 to 10 seconds of reference audio, useful for specifying speaker."
-                        )
+                with gr.Tab(label="Reference Audio"):
+                    gr.Markdown(
+                        "5 to 10 seconds of reference audio, useful for specifying speaker."
+                    )
 
-                        enable_reference_audio = gr.Checkbox(
-                            label="Enable Reference Audio",
+                    enable_reference_audio = gr.Checkbox(
+                        label="Enable Reference Audio",
+                    )
+                
+                    # Add dropdown for selecting example audio files
+                    example_audio_files = [f for f in os.listdir("examples") if f.endswith(".wav")]
+                    example_audio_dropdown = gr.Dropdown(
+                        label="Select Example Audio",
+                        choices=[""] + example_audio_files,
+                        value=""
+                    )
+                
+                    reference_audio = gr.Audio(
+                        label="Reference Audio",
+                        type="filepath",
+                    )
+                    with gr.Row():
+                        if_auto_label = gr.Checkbox(
+                            label="Auto Labeling",
+                            min_width=100,
+                            scale=0,
+                            value=False,
                         )
-                        reference_audio = gr.Audio(
-                            label="Reference Audio",
-                            type="filepath",
+                        reference_text = gr.Textbox(
+                            label="Reference Text",
+                            lines=1,
+                            placeholder="在一无所知中，梦里的一天结束了，一个新的「轮回」便会开始。",
+                            value="",
                         )
-                        with gr.Row():
-                            if_auto_label = gr.Checkbox(
-                                label="Auto Labeling",
-                                min_width=100,
-                                scale=0,
-                                value=False,
-                            )
-                            reference_text = gr.Textbox(
-                                label="Reference Text",
-                                lines=1,
-                                placeholder="在一无所知中，梦里的一天结束了，一个新的「轮回」便会开始。",
-                                value="",
-                            )
                     with gr.Tab(label="Batch Inference"):
                         batch_infer_num = gr.Slider(
                             label="Batch infer nums",
@@ -536,7 +545,28 @@ def build_app():
             ],
             outputs=[reference_text],
         )
+        
+        def select_example_audio(audio_file):
+            if audio_file:
+                audio_path = os.path.join("examples", audio_file)
+                lab_file = os.path.splitext(audio_file)[0] + ".lab"
+                lab_path = os.path.join("examples", lab_file)
+                
+                if os.path.exists(lab_path):
+                    with open(lab_path, "r", encoding="utf-8") as f:
+                        lab_content = f.read().strip()
+                else:
+                    lab_content = ""
+                
+                return audio_path, lab_content, True
+            return None, "", False
 
+        # Connect the dropdown to update reference audio and text
+        example_audio_dropdown.change(
+            fn=select_example_audio,
+            inputs=[example_audio_dropdown],
+            outputs=[reference_audio, reference_text, enable_reference_audio]
+        )
         # # Submit
         generate.click(
             inference_wrapper,
