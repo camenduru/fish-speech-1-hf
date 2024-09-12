@@ -650,4 +650,4 @@ if __name__ == "__main__":
     logger.info("Warming up done, launching the web UI...")
 
     app = build_app()
-    app.launch(show_api=True)
+    app.launch(show_api=True, share=True)
